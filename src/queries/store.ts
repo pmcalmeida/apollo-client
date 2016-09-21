@@ -31,8 +31,6 @@ export interface QueryStore {
 export interface QueryStoreValue {
   queryString: string;
   query: SelectionSetWithRoot;
-  minimizedQueryString: string;
-  minimizedQuery: SelectionSetWithRoot;
   variables: Object;
   loading: boolean;
   networkError: Error;
@@ -62,8 +60,6 @@ export function queries(
     newState[action.queryId] = {
       queryString: action.queryString,
       query: action.query,
-      minimizedQueryString: action.minimizedQueryString,
-      minimizedQuery: action.minimizedQuery,
       variables: action.variables,
       loading: true,
       networkError: null,

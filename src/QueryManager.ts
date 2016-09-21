@@ -58,17 +58,12 @@ import {
 
 import {
   diffSelectionSetAgainstStore,
-  removeUnusedVariablesFromQuery,
 } from './data/diffAgainstStore';
 
 import {
   MutationBehavior,
   MutationQueryReducersMap,
 } from './data/mutationResults';
-
-import {
-  queryDocument,
-} from './queryPrinting';
 
 import {
   QueryFetchRequest,
@@ -182,7 +177,7 @@ export class QueryManager {
     queryTransformer?: QueryTransformer,
     resultTransformer?: ResultTransformer,
     resultComparator?: ResultComparator,
-    shouldBatch?: Boolean,
+    shouldBatch?: boolean,
     batchInterval?: number,
   }) {
     // XXX this might be the place to do introspection for inserting the `id` into the query? or
@@ -757,53 +752,6 @@ export class QueryManager {
     };
   }
 
-  // Takes a selection set for a query and diffs it against the store.
-  // Returns a query document of selection sets
-  // that must be fetched from the server and as well as the  data returned from the store.
-  private handleDiffQuery({
-    queryDef,
-    rootId,
-    variables,
-    fragmentMap,
-    noFetch,
-  }: {
-    queryDef: OperationDefinition,
-    rootId: string,
-    variables: Object,
-    fragmentMap: FragmentMap,
-    noFetch: boolean,
-  }): {
-    diffedQuery: Document,
-    initialResult: Object,
-  } {
-    const { missingSelectionSets, result } = diffSelectionSetAgainstStore({
-      selectionSet: queryDef.selectionSet,
-      store: this.reduxRootSelector(this.store.getState()).data,
-      throwOnMissingField: false,
-      rootId,
-      variables,
-      fragmentMap,
-    });
-
-    const initialResult = result;
-    let diffedQuery: Document;
-    if (missingSelectionSets && missingSelectionSets.length && !noFetch) {
-      diffedQuery = queryDocument({
-        missingSelectionSets,
-        variableDefinitions: queryDef.variableDefinitions,
-        name: queryDef.name,
-        fragmentMap,
-      });
-
-      removeUnusedVariablesFromQuery(diffedQuery);
-    }
-
-    return {
-      diffedQuery,
-      initialResult,
-    };
-  }
-
   // Takes a request id, query id, a query document and information associated with the query
   // (e.g. variables, fragment map, etc.) and send it to the network interface. Returns
   // a promise for the result associated with that request.
@@ -906,6 +854,7 @@ export class QueryManager {
       queryDoc,
       fragmentMap,
     } = this.transformQueryDocument(options);
+
     const queryDef = getQueryDefinition(queryDoc);
     const queryString = print(queryDoc);
     const querySS = {
@@ -914,40 +863,25 @@ export class QueryManager {
       selectionSet: queryDef.selectionSet,
     } as SelectionSetWithRoot;
 
-    // If we don't use diffing, then these will be the same as the original query, other than
-    // the queryTransformer that could have been applied.
-    let minimizedQueryString = queryString;
-    let minimizedQuery = querySS;
-    let minimizedQueryDoc = queryDoc;
     let storeResult: any;
+    let needToFetch: boolean = forceFetch;
 
     // If this is not a force fetch, we want to diff the query against the
     // store before we fetch it from the network interface.
     if (!forceFetch) {
-      const {
-        diffedQuery,
-        initialResult,
-      } = this.handleDiffQuery({
-        queryDef,
+      const { isMissing, result } = diffSelectionSetAgainstStore({
+        selectionSet: queryDef.selectionSet,
+        store: this.reduxRootSelector(this.store.getState()).data,
+        throwOnMissingField: false,
         rootId: querySS.id,
         variables,
         fragmentMap,
-        noFetch,
       });
-      storeResult = initialResult;
-      if (diffedQuery) {
-        minimizedQueryDoc = diffedQuery;
-        minimizedQueryString = print(minimizedQueryDoc);
-        minimizedQuery = {
-          id: querySS.id,
-          typeName: 'Query',
-          selectionSet: getQueryDefinition(diffedQuery).selectionSet,
-        } as SelectionSetWithRoot;
-      } else {
-        minimizedQueryDoc = null;
-        minimizedQueryString = null;
-        minimizedQuery = null;
-      }
+
+      // If we're in here, only fetch if we have missing fields
+      needToFetch = isMissing;
+
+      storeResult = result;
     }
 
     const requestId = this.generateRequestId();
@@ -957,8 +891,6 @@ export class QueryManager {
       type: 'APOLLO_QUERY_INIT',
       queryString,
       query: querySS,
-      minimizedQueryString,
-      minimizedQuery,
       variables,
       forceFetch,
       returnPartialData: returnPartialData || noFetch,
@@ -969,23 +901,23 @@ export class QueryManager {
 
     // If there is no part of the query we need to fetch from the server (or,
     // noFetch is turned on), we just write the store result as the final result.
-    if (! minimizedQuery || returnPartialData || noFetch) {
+    if (! needToFetch || returnPartialData || noFetch) {
       this.store.dispatch({
         type: 'APOLLO_QUERY_RESULT_CLIENT',
         result: { data: storeResult },
         variables,
         query: querySS,
-        complete: !! minimizedQuery,
+        complete: !needToFetch,
         queryId,
       });
     }
 
-    if (minimizedQuery && !noFetch) {
+    if (needToFetch && !noFetch) {
       return this.fetchRequest({
         requestId,
         queryId,
-        query: minimizedQueryDoc,
-        querySS: minimizedQuery,
+        query: queryDoc,
+        querySS,
         options,
         fragmentMap,
       });
